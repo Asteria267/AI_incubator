@@ -1,310 +1,327 @@
-import os
-import json
-import time
 import streamlit as st
-import chromadb
+import os
 from groq import Groq
 from dotenv import load_dotenv
+from PyPDF2 import PdfReader
+from docx import Document
 
-# =========================================
-# ENVIRONMENT
-# =========================================
+# =========================================================
+# LOAD ENV
+# =========================================================
 load_dotenv()
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-# =========================================
-# APP CONFIG
-# =========================================
+# =========================================================
+# PAGE CONFIG
+# =========================================================
 st.set_page_config(
-    page_title="Asteria AI Tutor Pro",
+    page_title="Asteria AI Academy",
     page_icon="🧠",
     layout="wide"
 )
 
-# =========================================
-# THEME (ADVANCED UI SYSTEM)
-# =========================================
+# =========================================================
+# SAFE CSS (READABLE + DARK THEME)
+# =========================================================
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 html, body, .stApp {
-    background: #0d1117;
-    color: #e6edf3;
-    font-family: 'Inter';
+    background-color: #0b1220;
+    color: #e5e7eb;
+    font-family: Inter, sans-serif;
 }
 
-.block-container {
-    max-width: 1000px;
-    padding-top: 2rem;
-    padding-bottom: 6rem;
+h1, h2, h3 {
+    color: #ffffff !important;
 }
 
-/* CHAT CARDS */
-[data-testid="stChatMessage"] {
-    background: #161b22;
-    border: 1px solid #21262d;
-    border-radius: 14px;
-    padding: 1rem;
-    margin-bottom: 1rem;
+p, div, span {
+    color: #e5e7eb !important;
+    line-height: 1.6;
 }
 
-/* SIDEBAR */
-[data-testid="stSidebar"] {
-    background: #161b22;
+.lesson-card {
+    background: #111827;
+    padding: 2rem;
+    border-radius: 18px;
+    border: 1px solid #1f2937;
+    margin-bottom: 2rem;
 }
 
-/* BUTTONS */
 .stButton button {
-    width: 100%;
+    background: #2563eb;
+    color: white !important;
     border-radius: 10px;
-    background: #21262d;
-    color: white;
-}
-.stButton button:hover {
-    background: #30363d;
+    padding: 0.5rem 1rem;
+    border: none;
 }
 
-/* INPUT */
-[data-testid="stChatInput"] textarea {
-    background: #161b22;
-    color: white;
+.stButton button:hover {
+    background: #3b82f6;
 }
+
 </style>
 """, unsafe_allow_html=True)
 
-# =========================================
-# CLIENTS
-# =========================================
-@st.cache_resource
-def get_clients():
-    chroma_client = chromadb.PersistentClient(path="./chroma_db")
-    collection = chroma_client.get_collection("ai_knowledge")
-    llm = Groq(api_key=GROQ_API_KEY)
-    return collection, llm
+# =========================================================
+# SESSION STATE
+# =========================================================
+if "xp" not in st.session_state:
+    st.session_state.xp = 0
 
-collection, llm = get_clients()
+if "uploaded_text" not in st.session_state:
+    st.session_state.uploaded_text = ""
 
-# =========================================
-# SESSION STATE INIT
-# =========================================
-def init_state():
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+# =========================================================
+# LESSON DATA (LONG + CLEAN + SAFE)
+# =========================================================
+LESSONS = {
+    "Intro to LLMs": {
+        "image": "https://images.unsplash.com/photo-1677442136019-21780ecad995",
+        "hook": "Imagine an AI that has read almost the entire internet… and learned to talk like a human.",
+        "content": """Large Language Models (LLMs) are AI systems trained on massive datasets of text.
 
-    if "progress" not in st.session_state:
-        st.session_state.progress = {
-            "topics_learned": [],
-            "questions_asked": 0,
-            "quiz_score": []
-        }
+They do not “think” like humans.
+Instead, they predict the next word based on patterns.
 
-    if "mode" not in st.session_state:
-        st.session_state.mode = "tutor"
+This simple idea becomes powerful because:
+- they see billions of examples
+- they learn language structure
+- they adapt to context
 
-init_state()
-
-# =========================================
-# RAG PIPELINE (CLEAN ARCHITECTURE)
-# =========================================
-def retrieve(query, k=4):
-    results = collection.query(
-        query_texts=[query],
-        n_results=k
-    )
-
-    docs = results.get("documents", [[]])[0]
-    metas = results.get("metadatas", [[]])[0]
-
-    return docs, metas
-
-# =========================================
-# CHAT HISTORY ENGINE
-# =========================================
-def build_history(limit=10):
-    msgs = st.session_state.messages[-limit:]
-    return "\n".join([f"{m['role']}: {m['content']}" for m in msgs])
-
-# =========================================
-# LESSON ENGINE (IMPORTANT UPGRADE)
-# =========================================
-def lesson_mode_prompt(topic, context):
-    return f"""
-You are Asteria, an elite AI tutor.
-
-TASK: Teach the topic step-by-step.
-
-TOPIC: {topic}
-
-CONTEXT:
-{context}
-
-INSTRUCTIONS:
-1. Start with a simple explanation
-2. Then give structured breakdown
-3. Then provide analogy
-4. Then give 3 key bullet points
-5. End with a mini-check question
-
-Be clear, structured, and educational.
+That’s why they can:
+- write essays
+- answer questions
+- generate code
+- explain concepts
 """
+    },
 
-# =========================================
-# QUIZ ENGINE
-# =========================================
-def generate_quiz(topic):
-    return f"""
-Create a short quiz (3 questions) on: {topic}
+    "Transformers": {
+        "image": "https://images.unsplash.com/photo-1620712943543-bcc4688e7485",
+        "hook": "Transformers are the architecture that made modern AI possible.",
+        "content": """Before Transformers, AI struggled with long text.
 
-Rules:
-- Mix conceptual + reasoning questions
-- Do NOT provide answers yet
-- Make it beginner-friendly
+Transformers introduced ATTENTION.
+
+Attention allows AI to:
+- focus on important words
+- ignore irrelevant ones
+- understand relationships
+
+This is why AI now understands context so well.
+
+It is the foundation of:
+- ChatGPT
+- Claude
+- Gemini
 """
+    },
 
-# =========================================
-# MAIN AI ENGINE
-# =========================================
-def ask_ai(user_input, context, history, mode):
+    "RAG Systems": {
+        "image": "https://images.unsplash.com/photo-1555949963-ff9fe0c870eb",
+        "hook": "RAG helps AI use real documents instead of guessing.",
+        "content": """RAG = Retrieval Augmented Generation.
 
-    base_system = """
-You are Asteria, an advanced AI tutor system.
+Instead of relying only on memory, AI:
+1. searches documents
+2. finds relevant info
+3. uses it to answer
 
-CORE RULE:
-- You teach, not just answer
-- You guide thinking step-by-step
-- You are structured and logical
-- You avoid hallucination
+This makes AI:
+- more accurate
+- less hallucinating
+- more useful in real apps
 """
+    },
 
-    if mode == "quiz":
-        user_prompt = generate_quiz(user_input)
+    "Embeddings": {
+        "image": "https://images.unsplash.com/photo-1551288049-bebda4e38f71",
+        "hook": "Embeddings turn language into math.",
+        "content": """Embeddings convert words into numbers.
 
-    elif mode == "lesson":
-        user_prompt = lesson_mode_prompt(user_input, context)
+Similar meanings → close vectors
+Different meanings → far vectors
 
-    else:
-        user_prompt = f"""
-CONTEXT:
-{context}
-
-HISTORY:
-{history}
-
-QUESTION:
-{user_input}
+This enables:
+- semantic search
+- recommendations
+- RAG systems
 """
+    },
 
-    try:
-        res = llm.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": base_system},
-                {"role": "user", "content": user_prompt}
-            ],
-            max_tokens=900
-        )
+    "AI Agents": {
+        "image": "https://images.unsplash.com/photo-1531746790731-6c087fecd65a",
+        "hook": "AI agents don’t just answer — they act.",
+        "content": """AI agents can:
+- plan tasks
+- use tools
+- execute steps
 
-        return res.choices[0].message.content
+Example:
+Instead of answering, they can:
+- search
+- analyze
+- decide
+- complete tasks
 
-    except Exception as e:
-        return f"AI Error: {str(e)}"
+They are the future of AI systems.
+"""
+    }
+}
 
-# =========================================
-# SIDEBAR CONTROL PANEL
-# =========================================
+# =========================================================
+# QUIZZES
+# =========================================================
+QUIZZES = {
+    "Intro to LLMs": ("What do LLMs learn?", ["Patterns", "Memories", "Images"], "Patterns"),
+    "Transformers": ("What powers Transformers?", ["Attention", "Storage", "CPU"], "Attention"),
+    "RAG Systems": ("What does RAG do?", ["Search docs", "Delete files", "Random guess"], "Search docs"),
+    "Embeddings": ("Embeddings represent?", ["Meaning", "Colors", "Sound"], "Meaning"),
+    "AI Agents": ("Agents can?", ["Act", "Only chat", "Only store"], "Act")
+}
+
+# =========================================================
+# SIDEBAR
+# =========================================================
 with st.sidebar:
+    st.title("🧠 Asteria AI Academy")
+    st.metric("XP", st.session_state.xp)
 
-    st.title("🧠 Control Panel")
+    selected_lesson = st.radio("Lessons", list(LESSONS.keys()))
 
-    st.session_state.mode = st.selectbox(
-        "Learning Mode",
-        ["tutor", "lesson", "quiz"]
-    )
+# =========================================================
+# LESSON DISPLAY (SAFE + CLEAN)
+# =========================================================
+lesson = LESSONS[selected_lesson]
 
-    st.divider()
+st.markdown(f"""
+<div class="lesson-card">
 
-    topics = ["LLMs", "RAG", "Transformers", "Agents", "Prompt Engineering"]
+<img src="{lesson['image']}" style="
+width:100%;
+border-radius:14px;
+margin-bottom:1rem;
+">
 
-    st.markdown("### Quick Topics")
+<h1>{selected_lesson}</h1>
 
-    for t in topics:
-        if st.button(t):
-            st.session_state.quick = t
+<h3 style="color:#60a5fa;">{lesson['hook']}</h3>
 
-    st.divider()
+<div style="white-space:pre-wrap; font-size:17px;">
+{lesson['content']}
+</div>
 
-    if st.button("Reset Progress"):
-        st.session_state.progress = {
-            "topics_learned": [],
-            "questions_asked": 0,
-            "quiz_score": []
-        }
-
-    if st.button("Clear Chat"):
-        st.session_state.messages = []
-
-# =========================================
-# HEADER
-# =========================================
-st.markdown("""
-<h1 style='text-align:center;'>🧠 ASTERIA PRO</h1>
-<p style='text-align:center; color:#8b949e;'>
-AI Tutor with Memory • RAG • Lessons • Quiz System
-</p>
+</div>
 """, unsafe_allow_html=True)
 
-# =========================================
-# SHOW CHAT
-# =========================================
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+# =========================================================
+# QUIZ SYSTEM (FIXED LOGIC)
+# =========================================================
+q, options, answer = QUIZZES[selected_lesson]
 
-# =========================================
-# INPUT SYSTEM
-# =========================================
-if "quick" in st.session_state:
-    user_input = f"Teach me about {st.session_state.pop('quick')}"
-else:
-    user_input = st.chat_input("Ask Asteria...")
+st.subheader("🧠 Quiz")
 
-# =========================================
-# CHAT EXECUTION
-# =========================================
-if user_input:
+user_ans = st.radio(q, options, key=selected_lesson)
 
-    st.session_state.progress["questions_asked"] += 1
+if st.button("Submit Quiz"):
+    if user_ans == answer:
+        st.success("Correct +10 XP 🎉")
+        st.session_state.xp += 10
+    else:
+        st.error(f"Wrong ❌ Answer: {answer}")
 
-    st.session_state.messages.append({
-        "role": "user",
-        "content": user_input
-    })
+# =========================================================
+# FILE UPLOAD SYSTEM
+# =========================================================
+st.markdown("---")
+st.subheader("📂 Upload File")
 
-    with st.chat_message("user"):
-        st.markdown(user_input)
+file = st.file_uploader("Upload PDF / TXT / DOCX", type=["pdf", "txt", "docx"])
 
-    with st.chat_message("assistant"):
-        with st.spinner("Analyzing knowledge..."):
+def extract_text(file):
+    text = ""
 
-            context, metas = retrieve(user_input)
-            history = build_history()
+    if file.name.endswith("txt"):
+        text = file.read().decode("utf-8")
 
-            response = ask_ai(
-                user_input,
-                "\n\n".join(context),
-                history,
-                st.session_state.mode
-            )
+    elif file.name.endswith("pdf"):
+        pdf = PdfReader(file)
+        for page in pdf.pages:
+            if page.extract_text():
+                text += page.extract_text()
 
-            st.markdown(response)
+    elif file.name.endswith("docx"):
+        doc = Document(file)
+        for p in doc.paragraphs:
+            text += p.text + "\n"
 
-            if metas:
-                topics = list(set([m.get("topic", "") for m in metas if m]))
-                st.caption(f"Sources: {', '.join(topics)}")
+    return text
 
-    st.session_state.messages.append({
-        "role": "assistant",
-        "content": response
-    })
+if file:
+    st.session_state.uploaded_text = extract_text(file)
+    st.success("File processed successfully ✔")
+
+# =========================================================
+# FILE Q&A
+# =========================================================
+if st.session_state.uploaded_text:
+
+    st.subheader("💬 Ask your file")
+
+    q2 = st.text_input("Ask something from file")
+
+    if q2:
+
+        context = st.session_state.uploaded_text[:12000]
+
+        res = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Answer ONLY from the provided file."
+                },
+                {
+                    "role": "user",
+                    "content": context + "\n\nQuestion: " + q2
+                }
+            ],
+            max_tokens=500
+        )
+
+        st.markdown(res.choices[0].message.content)
+
+# =========================================================
+# QUIZ FROM FILE
+# =========================================================
+if st.session_state.uploaded_text:
+
+    if st.button("Generate Quiz From File"):
+
+        context = st.session_state.uploaded_text[:10000]
+
+        quiz = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Create 5 beginner quiz questions."
+                },
+                {
+                    "role": "user",
+                    "content": context
+                }
+            ],
+            max_tokens=700
+        )
+
+        st.markdown(quiz.choices[0].message.content)
+
+# =========================================================
+# FOOTER
+# =========================================================
+st.markdown("---")
+st.caption("🧠 Asteria AI Academy — built with Streamlit + Groq")
